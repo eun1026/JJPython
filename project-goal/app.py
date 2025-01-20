@@ -1,110 +1,82 @@
-# app.py
-from flask import Flask, render_template, request, redirect, url_for, session, flash
-from model import db, User, Goal
-from config import Config
-import bcrypt
+from flask import Flask,render_template,request,redirect,url_for,jsonify,send_from_directory
 import os
+from datetime import datetime
+from models import DBManager
 
 app = Flask(__name__)
-app.config.from_object(Config)
-db.init_app(app)
+#app.config['UPLOAD_FOLDER'] = 'static/uploads'
+app.config['UPLOAD_FOLDER'] = os.path.join(app.root_path, 'static', 'uploads')
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# 회원가입 페이지
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
+manager = DBManager()
+
+# 목록보기
+@app.route('/')
+def index():
+    posts = manager.get_all_posts()
+    return render_template('index.html',posts=posts)
+
+# 내용보기
+@app.route('/post/<int:id>')
+def view_post(id):
+    post = manager.get_post_by_id(id)
+    return render_template('view.html',post=post)
+
+# 내용추가
+# 파일업로드: enctype="multipart/form-data", method='POST', type='file', accept=".png,.jpg,.gif" 
+@app.route('/post/add', methods=['GET', 'POST'])
+def add_post():
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        title = request.form['title']
+        content = request.form['content']
+        
+        # 첨부파일 한 개
+        file = request.files['file']
+        filename = file.filename if file else None
+        
+        if filename:
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            
+        # 첨부파일 여러 개 (multiple 속성)
+        # files = request.files.getlist('files')
+        # saved_files = []
+        # for file in files:
+        #     if file and file.filename != '':
+        #         filename = file.filename
+        #         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        #         saved_files.append(filename)
+        
+        # filename = ",".join(saved_files)
+        
+        if manager.insert_post(title,content,filename):
+            return redirect("/")
+        return "게시글 추가 실패", 400        
+    return render_template('add.html')
 
-        # 사용자 DB에 추가
-        new_user = User(username=username, password=hashed_password)
-        db.session.add(new_user)
-        db.session.commit()
 
-        flash('회원가입 성공! 로그인하세요.')
-        return redirect(url_for('login'))
-    return render_template('signup.html')
-
-# 로그인 페이지
-@app.route('/login', methods=['GET', 'POST'])
-def login():
+@app.route('/post/edit/<int:id>', methods=['GET', 'POST'])
+def edit_post(id):
+    post = manager.get_post_by_id(id)
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+        title = request.form['title']
+        content = request.form['content']
+        
+        file = request.files['file']
+        filename = file.filename if file else None
+        
+        if filename:
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        
+        if manager.update_post(id,title,content,filename):
+            return redirect("/")
+        return "게시글 추가 실패", 400        
+    return render_template('edit.html',post=post)
 
-        user = User.query.filter_by(username=username).first()
-
-        if user and bcrypt.checkpw(password.encode('utf-8'), user.password.encode('utf-8')):
-            session['user_id'] = user.id
-            flash('로그인 성공!')
-            return redirect(url_for('home'))
-        else:
-            flash('아이디 또는 비밀번호가 잘못되었습니다.')
-            return redirect(url_for('login'))
-    return render_template('login.html')
-
-# 로그아웃
-@app.route('/logout')
-def logout():
-    session.pop('user_id', None)
-    flash('로그아웃 성공!')
-    return redirect(url_for('login'))
-
-# 메인 화면 (목표 목록 표시)
-@app.route('/home')
-def home():
-    if 'user_id' not in session:
-        flash('로그인 후 이용해주세요.')
-        return redirect(url_for('login'))
-
-    user_id = session['user_id']
-    user_goals = Goal.query.filter_by(user_id=user_id).all()
-    return render_template('home.html', goals=user_goals)
-
-# 목표 추가 페이지
-@app.route('/add_goal', methods=['GET', 'POST'])
-def add_goal():
-    if 'user_id' not in session:
-        flash('로그인 후 이용해주세요.')
-        return redirect(url_for('login'))
-
-    if request.method == 'POST':
-        goal_name = request.form['goal_name']
-        target_amount = float(request.form['target_amount'])
-        deadline = request.form['deadline']
-        save_frequency = request.form['save_frequency']
-        user_id = session['user_id']
-
-        new_goal = Goal(name=goal_name, target_amount=target_amount, deadline=deadline, save_frequency=save_frequency, user_id=user_id)
-        db.session.add(new_goal)
-        db.session.commit()
-
-        flash('목표가 추가되었습니다!')
-        return redirect(url_for('home'))
-
-    return render_template('add_goal.html')
-
-# 목표 진행 상황 페이지
-@app.route('/goal/<int:goal_id>', methods=['GET', 'POST'])
-def goal(goal_id):
-    if 'user_id' not in session:
-        flash('로그인 후 이용해주세요.')
-        return redirect(url_for('login'))
-
-    goal = Goal.query.get_or_404(goal_id)
-
-    if request.method == 'POST':
-        saved_amount = float(request.form['saved_amount'])
-        goal.saved_amount += saved_amount  # 저축액 추가
-        db.session.commit()
-
-        flash(f'{saved_amount}원이 목표에 추가되었습니다!')
-        return redirect(url_for('goal', goal_id=goal.id))
-
-    # 진행률 계산
-    progress = goal.progress()
-    return render_template('goal_detail.html', goal=goal, progress=progress)
+@app.route('/post/delete/<int:id>')
+def delete_post(id):
+    if manager.delete_post(id):
+        return redirect(url_for('index'))
+    return "게시글 삭제 실패", 400
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host="0.0.0.0",port=5005,debug=True)
