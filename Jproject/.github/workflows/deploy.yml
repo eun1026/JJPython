@@ -18,5 +18,6 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /home/ubuntu/flask_app/JJPython
-            git pull origin main
+            git fetch --all
+            git reset --hard origin/main
             sudo systemctl restart flask_app
